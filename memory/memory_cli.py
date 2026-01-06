@@ -1,4 +1,3 @@
-# memory_cli.py
 from memory_manager import MemoryManager
 import sys
 
