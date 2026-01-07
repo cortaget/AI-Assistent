@@ -1,161 +1,96 @@
-# voice_assistant.py
-import json
-import requests
-import pyttsx3
-import pyaudio
-from vosk import Model, KaldiRecognizer
-from core.plugin_loader import load_plugins, run_plugin
-import threading
-import queue
-
-# 🌐 Настройки Ollama
-LLM_URL = "http://127.0.0.1:11434/api/generate"
-LLM_MODEL = "gemma3:4b"
-
-# 🎤 Инициализация распознавания речи
-model = Model("E:\\python\\PYCHARM\\UZISpeach\\vosk-model-small-ru-0.22")
-recognizer = KaldiRecognizer(model, 16000)
-
-p = pyaudio.PyAudio()
-stream = p.open(format=pyaudio.paInt16,
-                channels=1,
-                rate=16000,
-                input=True,
-                frames_per_buffer=4096)
-stream.start_stream()
-
-# ✅ РЕШЕНИЕ: Очередь для озвучки + выделенный поток
-speech_queue = queue.Queue()
-
-
-def speech_worker():
-    """Рабочий поток для озвучки - инициализация TTS внутри потока"""
-    # ✅ Инициализируем pyttsx3 ВНУТРИ рабочего потока
-    tts = pyttsx3.init()
-
-    # Настройка голоса
-    voices = tts.getProperty('voices')
-    for voice in voices:
-        if "irina" in voice.name.lower():
-            tts.setProperty('voice', voice.id)
-            print(f"✅ Используется голос: {voice.name}")
-            break
-
-    tts.setProperty('rate', 160)
-
-    # Обработка очереди
-    while True:
-        text = speech_queue.get()
-        if text is None:  # Сигнал завершения
-            break
-        tts.say(text)
-        tts.runAndWait()
-        speech_queue.task_done()
-
-
-# Запускаем поток озвучки
-speech_thread = threading.Thread(target=speech_worker, daemon=True)
-speech_thread.start()
-
-
-def speak(text):
-    """Добавление текста в очередь озвучки (неблокирующее)"""
-    speech_queue.put(text)
-
-
-# ✅ РЕШЕНИЕ 2: Очистка буфера перед прослушиванием
-def listen_command():
-    """Прослушивание команды с очисткой буфера"""
-    print("🎙️ Говори (на русском)...")
-
-    # Очищаем накопленный буфер перед началом прослушивания
-    try:
-        stream.read(stream.get_read_available(), exception_on_overflow=False)
-    except:
-        pass
-
-    while True:
-        data = stream.read(4096, exception_on_overflow=False)
-        if recognizer.AcceptWaveform(data):
-            result = json.loads(recognizer.Result())
-            text = result.get("text", "")
-            if text:
-                print(f"📝 Распознано: {text}")
-                return text
-
-
-chat_history = []  # 💾 История диалога
-use_stream = True
-MAX_HISTORY = 20  # количество последних сообщений для контекста
-
-
-def query_llm_stream(user_input):
-    chat_history.append(f"User: {user_input}")
-    # берем последние MAX_HISTORY сообщений
-    context = chat_history[-MAX_HISTORY:]
-    full_prompt = "\n".join(context) + "\nAssistant:"
-
-    payload = {
-        "model": LLM_MODEL,
-        "prompt": full_prompt
-    }
-
-    try:
-        response = requests.post(LLM_URL, json=payload, stream=True)
-
-        if response.status_code != 200:
-            return f"Ошибка: {response.status_code} {response.text}"
-
-        reply = ""
-        print("💬 Ответ ИИ:", end=' ', flush=True)
-
-        for line in response.iter_lines():
-            if line:
-                part = json.loads(line.decode('utf-8')).get("response", "")
-                print(part, end='', flush=True)
-                reply += part
-
-        print()
-        chat_history.append(f"Assistant: {reply}")
-        return reply
-
-    except Exception as e:
-        return f"Ошибка соединения: {str(e)}"
+# main.py
+from config import Config
+from core.voice_assistant import VoiceAssistant
 
 
 def main():
-    # Загрузка плагинов
-    plugin_handlers = load_plugins()
+    """Главная функция запуска ассистента"""
 
-    # Главная функция ассистента
-    print("🧠 Локальный голосовой ассистент (на русском)")
-    speak("Привет, хозяин!")
+    # Создание конфигурации
+    config = Config()
 
-    while True:
-        user_input = listen_command()
-        if not user_input:
-            continue
+    # Создание ассистента
+    assistant = VoiceAssistant(config)
+    """
+    # Примеры тестирования (раскомментируй нужное)
+    # Тест 1: Время (ключевое слово + контекст)
+    assistant.next_prompt("сколько сейчас времени", use_voice=False)
 
-        if any(word in user_input for word in ["выход", "стоп", "выключись", "закройся"]):
-            speak("Пока, хозяин!")
-            print("👋 Завершение работы.")
-            speech_queue.put(None)  # Сигнал завершения потока озвучки
-            speech_thread.join(timeout=2)  # Ждём завершения озвучки
-            break
+    print("\n" + "=" * 50 + "\n")
 
-        handled = False
-        for handler in plugin_handlers:
-            result = handler(user_input)
-            if result:
-                chat_history.append(f"Assistant: {result}")
-                print("🧩 Плагин:", result)
-                speak(result)
-                handled = True
-                break
+    # Тест 2: Ложное срабатывание (должно НЕ сработать)
+    assistant.next_prompt("у меня на сегодня запланирована дата", use_voice=False)
 
-        if not handled:
-            reply = query_llm_stream(user_input)
-            speak(reply)
+    print("\n" + "=" * 50 + "\n")
+
+    # Тест 3: Семантика без ключевых слов
+    assistant.next_prompt("какое сегодня число", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+    assistant.next_prompt("подскажика пожалуйста сколько сейчас времечка", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+    # Тест обычного вопроса
+    assistant.next_prompt("как дела", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+
+    """
+    """
+    assistant.next_prompt("сколько будет два плюс 2", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+    assistant.next_prompt("сколько будет два плюс четыре", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+    """
+
+
+    assistant.next_prompt("Сколько будет 15*3, потом результат раздели на 5", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+    assistant.next_prompt(
+        "Сколько будет четыреста пятьдесят семь умножить на пятнадцать, разделить на три, разделить на тридцать",
+        use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+    # assistant.next_prompt("Тело массой 5 кг тянут силой 18 Н по горизонтали, сила трения равна 3 Н — найди его ускорение.", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+    # assistant.next_prompt("привет как дела", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+    assistant.next_prompt("Привет меня зовут Максим", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+    assistant.next_prompt("забудь что меня зовут максим", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+
+    assistant.next_prompt("сколько сейчас времени", use_voice=False)
+
+    print("\n" + "=" * 50 + "\n")
+    assistant.next_prompt("подскажика пожалуйста сколько сейчас времечка", use_voice=False)
+    """
+    """
+    """
+    print("\n" + "=" * 50 + "\n")
+    # Тестирование текстом
+    print("\n" + "=" * 50 + "\n")
+    assistant.next_prompt("Ahoj, jak se máš?", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+    assistant.next_prompt("Hello, how are you?", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+    assistant.next_prompt("Привет, как дела?", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+    assistant.next_prompt("Bonjour, comment ça va?", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+    assistant.next_prompt("你好，你好吗？", use_voice=False)
+    print("\n" + "=" * 50 + "\n")
+    """
+    print("🧠 проверка завершена")
+
+    # Запуск голосового цикла (раскомментируй для использования)
+    # assistant.run_voice_loop()
 
 
 if __name__ == "__main__":

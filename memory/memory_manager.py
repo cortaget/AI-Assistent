@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 from typing import List, Dict, Optional
 import requests
+from core.language_utils import LanguageDetector
 import json
 
 class MemoryManager:
@@ -13,6 +14,62 @@ class MemoryManager:
         """Инициализация системы памяти"""
         # Векторная модель для эмбеддингов (384 измерения, быстрая)
         self.embedder = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+        try:
+            self.lang_detector = LanguageDetector()
+        except:
+            self.lang_detector = None
+
+        # Обновите метод add_memory (добавьте только 2 строки):
+        def add_memory(self, content: str, memory_type: str = "user_info",
+                       metadata: Optional[Dict] = None) -> str:
+            memory_id = str(uuid.uuid4())
+            embedding = self.embedder.encode(content).tolist()
+
+            # НОВОЕ: определяем язык
+            detected_lang = self.lang_detector.detect(content) if self.lang_detector else 'unknown'
+
+            mem_metadata = {
+                "type": memory_type,
+                "language": detected_lang,  # НОВОЕ
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }
+
+            if metadata:
+                mem_metadata.update(metadata)
+
+            self.collection.add(
+                ids=[memory_id],
+                documents=[content],
+                embeddings=[embedding],
+                metadatas=[mem_metadata]
+            )
+
+            return memory_id
+
+        # Обновите update_memory (добавьте 1 строку):
+        def update_memory(self, memory_id: str, new_content: str, new_metadata: Optional[Dict] = None):
+            old = self.collection.get(ids=[memory_id])
+            if not old['ids']:
+                print(f"❌ Память {memory_id} не найдена")
+                return
+
+            metadata = old['metadatas'][0]
+            metadata['updated_at'] = datetime.now().isoformat()
+            metadata['language'] = self.lang_detector.detect(new_content) if self.lang_detector else 'unknown'  # НОВОЕ
+
+            if new_metadata:
+                metadata.update(new_metadata)
+
+            embedding = self.embedder.encode(new_content).tolist()
+            self.collection.update(
+                ids=[memory_id],
+                documents=[new_content],
+                embeddings=[embedding],
+                metadatas=[metadata]
+            )
+            print(f"✅ Память обновлена: {memory_id[:8]}...")
+
 
         # ChromaDB клиент с постоянным хранением
         self.client = chromadb.PersistentClient(
