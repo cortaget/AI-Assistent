@@ -14,12 +14,7 @@ class VoiceAssistant:
     """Главный класс голосового ассистента"""
 
     def __init__(self, config: Config = None):
-        """
-        Инициализация ассистента
-
-        Args:
-            config: Объект конфигурации
-        """
+        """Инициализация ассистента"""
         self.config = config or Config()
 
         # Инициализация компонентов
@@ -48,57 +43,71 @@ class VoiceAssistant:
         else:
             self.lang_detector = None
 
-        # Обновите _query_without_tools (измените только системный промпт):
-        def _query_without_tools(self, user_input: str) -> str:
-            relevant_memories = self.memory_manager.search_memory(
-                user_input,
-                top_k=self.config.MEMORY_TOP_K
-            )
-
-            # ИЗМЕНЕННЫЙ системный промпт (добавлена 1 строка)
-            system_prompt = """Ты - голосовой ИИ-ассистент, который ведёт диалог с пользователем.
-        ВАЖНО понимать:
-        - ТЫ - это ассистент (искусственный интеллект)
-        - ПОЛЬЗОВАТЕЛЬ - это человек, который с тобой общается
-        - Отвечай на том же языке, на котором задан вопрос
-        """
-
-            memory_context = ""
-            if relevant_memories:
-                filtered = [m for m in relevant_memories if m['relevance'] > self.config.MEMORY_RELEVANCE_THRESHOLD]
-                if filtered:
-                    memory_context = "[Информация из долговременной памяти]:\n"
-                    for mem in filtered:
-                        # НОВОЕ: показываем язык записи
-                        lang = mem['metadata'].get('language', '?')
-                        memory_context += f"- [{lang}] {mem['content']}\n"
-                    memory_context += "\n"
-
-            full_prompt = system_prompt + memory_context + f"Пользователь: {user_input}\nАссистент:"
-            return self.llm_client.stream_call(full_prompt)
-
-        # Обновите next_prompt (добавьте определение языка для TTS):
-        def next_prompt(self, user_input: str, use_voice: bool = False) -> str:
-            reply = self.process_query(user_input)
-
-            if use_voice:
-                # НОВОЕ: определяем язык для правильной озвучки
-                detected_lang = None
-                if self.lang_detector and self.config.ENABLE_MULTILINGUAL:
-                    detected_lang = self.lang_detector.detect(user_input)
-
-                self.speech_manager.speak(reply, detected_lang)
-
-            return reply
-
-
-
-
-
-
-
         # Загрузка плагинов
         self.plugin_handlers = load_plugins()
+
+    def _query_without_tools(self, user_input: str) -> str:
+        """Обработка запроса без инструментов"""
+        relevant_memories = self.memory_manager.search_memory(
+            user_input,
+            top_k=self.config.MEMORY_TOP_K
+        )
+
+        # Определяем язык через библиотеку
+        detected_lang = "ru"
+        if self.lang_detector:
+            detected_lang = self.lang_detector.detect(user_input)
+
+            # Fallback для кириллицы: mk, bg, sr → ru
+            if detected_lang in ['mk', 'bg', 'sr', 'uk', 'be']:
+                detected_lang = 'ru'
+
+            print(f"🌍 Язык: {detected_lang}")
+
+        # Простой системный промпт
+        system_prompt = """Ты - голосовой ИИ-ассистент.
+    ВАЖНО понимать:
+    - ТЫ - это ассистент (искусственный интеллект)
+    - ПОЛЬЗОВАТЕЛЬ - это человек, который с тобой общается
+    """
+
+        # Контекст из памяти
+        memory_context = ""
+        if relevant_memories:
+            filtered = [m for m in relevant_memories if m['relevance'] > self.config.MEMORY_RELEVANCE_THRESHOLD]
+            if filtered:
+                memory_context = "[Информация из долговременной памяти]:\n"
+                for mem in filtered:
+                    memory_context += f"- {mem['content']}\n"
+                memory_context += "\n"
+
+        # Карта инструкций по языкам
+        lang_instructions = {
+            'ru': '(ВАЖНО: Отвечай ТОЛЬКО на русском языке)',
+            'en': '(IMPORTANT: Reply ONLY in English)',
+            'de': '(WICHTIG: Antworte NUR auf Deutsch)',
+            'fr': '(IMPORTANT: Réponds UNIQUEMENT en français)',
+            'es': '(IMPORTANTE: Responde SOLO en español)',
+            'it': '(IMPORTANTE: Rispondi SOLO in italiano)',
+            'pt': '(IMPORTANTE: Responda APENAS em português)',
+            'cs': '(DŮLEŽITÉ: Odpovídej POUZE česky)',  # ← ЧЕШСКИЙ ДОБАВЛЕН
+            'zh': '(重要: 仅用中文回答)',
+            'ja': '(重要: 日本語のみで回答)',
+            'ko': '(중요: 한국어로만 답변)'
+        }
+
+        lang_hint = lang_instructions.get(detected_lang, lang_instructions['ru'])
+
+        # Собираем промпт
+        full_prompt = (
+                system_prompt +
+                memory_context +
+                f"Пользователь: {user_input}\n" +
+                f"{lang_hint}\n" +
+                "Ассистент:"
+        )
+
+        return self.llm_client.stream_call(full_prompt)
 
     def process_query(self, user_input: str) -> str:
         """
@@ -112,12 +121,13 @@ class VoiceAssistant:
         """
         print(f"\n👤 {user_input}")
 
+        """
         # Проверка плагинов
         for handler in self.plugin_handlers:
             result = handler(user_input)
             if result:
                 return result
-
+        """
         # Основная обработка через LLM
         reply = self._query_llm_stream(user_input)
 
@@ -165,42 +175,6 @@ class VoiceAssistant:
         print("💬 Обработка без инструментов...\n")
         return self._query_without_tools(user_input)
 
-    def _query_without_tools(self, user_input: str) -> str:
-        """
-        Обработка запроса без инструментов
-
-        Args:
-            user_input: Ввод пользователя
-
-        Returns:
-            Ответ ассистента
-        """
-        # Поиск релевантных воспоминаний
-        relevant_memories = self.memory_manager.search_memory(
-            user_input,
-            top_k=self.config.MEMORY_TOP_K
-        )
-
-        # Системный промпт
-        system_prompt = """Ты - голосовой ИИ-ассистент, который ведёт диалог с пользователем.
-ВАЖНО понимать:
-- ТЫ - это ассистент (искусственный интеллект)
-- ПОЛЬЗОВАТЕЛЬ - это человек, который с тобой общается
-"""
-
-        # Добавление контекста из памяти
-        memory_context = ""
-        if relevant_memories:
-            filtered = [m for m in relevant_memories if m['relevance'] > self.config.MEMORY_RELEVANCE_THRESHOLD]
-            if filtered:
-                memory_context = "[Информация из долговременной памяти]:\n"
-                for mem in filtered:
-                    memory_context += f"- {mem['content']}\n"
-                memory_context += "\n"
-
-        full_prompt = system_prompt + memory_context + f"Пользователь: {user_input}\nАссистент:"
-
-        return self.llm_client.stream_call(full_prompt)
 
     def _query_with_tools(self, user_input: str, relevant_tools: List[Dict]) -> str:
         """

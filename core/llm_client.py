@@ -56,16 +56,7 @@ class LLMClient:
         return ""
 
     def stream_call(self, prompt: str, temperature: float = None) -> str:
-        """
-        Вызов LLM со стримингом
-
-        Args:
-            prompt: Промпт для LLM
-            temperature: Температура генерации
-
-        Returns:
-            Полный ответ LLM
-        """
+        """Вызов LLM со стримингом"""
         if temperature is None:
             temperature = self.config.LLM_TEMPERATURE
 
@@ -74,7 +65,9 @@ class LLMClient:
             "prompt": prompt,
             "stream": True,
             "options": {
-                "temperature": temperature
+                "temperature": temperature,
+                "repeat_last_n": 256,  # НОВОЕ: лучше следует инструкциям
+                "repeat_penalty": 1.1  # НОВОЕ: не повторяется
             }
         }
 
